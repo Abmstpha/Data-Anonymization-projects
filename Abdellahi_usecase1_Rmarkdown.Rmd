@@ -1,0 +1,239 @@
+---
+title: "FIES Data Anonymization Usecase1"
+author: "Abdellahi El Moustapha"
+date: "2025-03-30"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#  Introduction
+This document demonstrates how to transform the 2006 Family Income and Expenditure Survey (FIES) data into a safe microdata file using the `sdcMicro` package. We will:
+- Pre-process and inspect the data  
+- Create an sdcMicro object  
+- Evaluate disclosure risk  
+- Recode key variables  
+- Apply local suppression, microaggregation, and PRAM  
+- Export the anonymized data
+
+# 1.  Data Import and Pre-processing
+
+```{r}
+#  Load required libraries
+library(sdcMicro)
+library(readxl)
+library(sdcTable)
+
+#  Read the FIES 2006 data from a CSV file (adjust the file path as needed)
+fies06 <- read.csv("data/FIES06.csv")
+
+#  Check the structure of the original dataset
+str(fies06)
+
+
+#  Convert all column names to uppercase
+names(fies06) <- toupper(names(fies06))
+
+#  Verify the structure 
+str(fies06)
+```
+##  COMMENT:
+The dataset contains 38,483 observations and 721 variables.
+Column names are now fully capitalized, as seen in W_REGN, W_URB2, etc.
+This step ensures consistency for referencing variables in sdcMicro,
+which is case-sensitive and requires exact variable names.
+
+
+
+# 2.  Create sdcMicro Object
+
+```{r}
+#  Create an sdcMicro object with key variables and numerical variables,
+#  and specify the sampling weight variable ('RFACT').
+#  Note: All variable names are now in uppercase.
+sdc <- createSdcObj(fies06,
+                    keyVars = c('W_REGN', 'Z2011_H_SEX', 'Z2021_H_AGE', 'Z2041_H_EDUC'),
+                    numVars = c('WAGES', 'WSAG', 'WSNAG', 'PNSNS', 'TOINC'),
+                    weightVar = 'RFACT')
+
+#  Display a summary of the sdcMicro object (includes frequency counts and anonymity info)
+show(sdc)
+```
+##  COMMENT:
+This output shows violations of k-anonymity:
+- 4,506 records violate 2-anonymity (more easily re-identifiable)
+- 8,068 violate 3-anonymity, and 13,753 violate 5-anonymity
+This highlights the high re-identification risk in the original dataset.
+
+Numerical key variables include: WAGES, WSAG, WSNAG, PNSNS, TOINC
+
+Disclosure risk bounds are very wide (0%–100%), indicating the need for protection.
+
+Information loss (IL1 and eigenvalue difference) is currently 0.00,
+which is expected since no anonymization techniques have been applied yet.
+
+
+
+
+# 3.  Frequency Counts and Disclosure Risk
+
+```{r}
+
+
+#  Print risk measures: expected number of re-identifications, etc.
+print(sdc, "risk")
+```
+##  COMMENT:
+This output summarizes the disclosure risk in the dataset.
+No records have higher risk than the main part of the population, which is reassuring.
+
+The expected number of re-identifications is approximately 91 out of 38,483 records (0.24%).
+This level of risk is relatively low, but it still justifies the need for anonymization techniques
+to further minimize potential disclosure.
+
+
+# 4. Global Risk Estimation (Log-linear Model)
+
+```{r}
+#  If available, include additional variables (e.g., 'Z2031_H_MS') in the risk model.
+#  Here we check if 'Z2031_H_MS' exists; if not, we skip this step.
+if("Z2031_H_MS" %in% names(fies06)) {
+  form <- ~W_REGN + Z2011_H_SEX + Z2021_H_AGE + Z2041_H_EDUC + Z2031_H_MS
+  sdc <- modRisk(sdc, formulaM = form)
+  #  Display the estimated model and global risk measures
+  print(slot(sdc, "risk")$model)
+} else {
+  cat("Variable 'Z2031_H_MS' not found; skipping modRisk model.\n")
+}
+```
+##  COMMENT:
+The risk measures indicate the level of disclosure risk in the dataset. In this case, the risk measures are relatively high, suggesting that there is a significant risk of re-identification. This highlights the need for further anonymization techniques to minimize potential disclosure risks.
+
+
+
+# 5. Recoding Key Variables
+
+```{r}
+#  Recode the age variable into 10-year intervals to reduce key uniqueness
+sdc <- globalRecode(sdc, column = "Z2021_H_AGE",
+                    breaks = seq(9, 99, 10), labels = 1:9)
+
+#  Recode the education variable by combining categories
+sdc <- globalRecode(sdc, column = "Z2041_H_EDUC",
+                    breaks = c(-100, 59, 69, 180), labels = c(0, 6, 7))
+
+#  Display k-anonymity status after recoding
+print(sdc, "kAnon")
+```
+##  COMMENT:
+The recoding of key variables has significantly reduced the number of observations violating k-anonymity, which indicates improved anonymity in the dataset. However, there are still some observations violating 2-anonymity, 3-anonymity, and 5-anonymity, suggesting that further anonymization techniques may be necessary to fully protect individual privacy.
+
+# 6. Local Suppression
+
+```{r}
+#  Apply local suppression to achieve 3-anonymity on the key variables
+sdc <- localSuppression(sdc, k = 3)
+
+#  Print details on local suppression and current k-anonymity status
+print(sdc, "ls")
+print(sdc, "kAnon")
+```
+##  COMMENT:
+-The local suppression process has resulted in a small number of suppressions for the key variables. This indicates that the technique has been applied to reduce the uniqueness of the key variables, thereby enhancing anonymity. The k-anonymity status shows the number of observations violating different levels of anonymity after the suppression process.
+-After applying local suppression, the dataset has achieved 3-anonymity with no observations violating 2-anonymity or 3-anonymity. However, there are still 29 observations violating 5-anonymity. This indicates that while the local suppression technique has improved the anonymity of the dataset, further anonymization techniques may be necessary to fully protect individual privacy, especially for higher levels of k-anonymity.
+
+
+
+# 7. Microaggregation for Numerical Variables
+
+```{r}
+#  Apply microaggregation (using the MDAV method) to reduce risk on numerical variables.
+#  This aggregates values into groups of similar observations.
+sdc <- microaggregation(sdc)
+
+#  Display numerical risk measures after microaggregation
+print(sdc, "numrisk")
+```
+##  COMMENT:
+Disclosure Risk:
+The disclosure risk in the original data was 100%, indicating a high risk of re-identification.
+After applying microaggregation, the disclosure risk has been significantly reduced, ranging from 0.00% to 91.51%. This indicates that the technique has effectively reduced the risk of re-identification.
+Information Loss:
+The information loss (IL1) in the modified data is 315480.19, which is a measure of how much information has been lost due to the aggregation process.
+The difference of eigenvalues is -72.770%, indicating a reduction in the variability of the data.
+
+Overall, the application of microaggregation has successfully reduced the disclosure risk while introducing some information loss. This technique helps in balancing the need for data privacy with the utility of the dataset.
+
+
+
+# 8. Post-Randomization (PRAM) for Categorical Variables
+```{r}
+#  Ensure 'W_REGN' is a factor in both the original data and the manipulated key variables
+sdc@origData$W_REGN <- as.factor(sdc@origData$W_REGN)
+sdc@manipKeyVars$W_REGN <- as.factor(sdc@manipKeyVars$W_REGN)
+
+#  Now apply PRAM to the 'W_REGN' variable using the correct argument 'variables'
+sdc <- pram(sdc, variables = "W_REGN")
+
+#  Show the first few lines of the PRAM transition summary
+head(get.sdcMicroObj(sdc, "pram"))
+```
+##  COMMENT:
+The application of PRAM to the W_REGN variable has introduced random noise, transitioning the original values to different values. This process helps in reducing the uniqueness of the data, thereby enhancing anonymity. The transition summary provides insights into how frequently each original value has been transitioned to other values, ensuring that the data remains useful while protecting individual privacy
+
+
+
+# 9. Final Risk and Utility Evaluation
+
+```{r}
+#  Final Risk Evaluation
+#  Print the final risk measures after all anonymization steps
+print(sdc, "risk")
+```
+##  COMMENT:
+Number of Observations with Higher Risk:
+
+The number of observations with higher risk than the main part of the data is 0 in both the modified and original datasets. This indicates that the anonymization techniques have been effective in reducing the risk of re-identification.
+Expected Number of Re-identifications:
+
+The expected number of re-identifications has been significantly reduced from 91.31 (0.24%) in the original data to 1.10 (0.00%) in the modified data. This demonstrates the effectiveness of the anonymization techniques in protecting individual privacy.
+Overall, the final risk evaluation shows that the anonymization techniques have successfully reduced the risk of re-identification while maintaining the utility of the dataset. This balance is crucial for ensuring that the data remains useful for analysis while protecting individual privacy.
+
+
+```{r}
+#  Evaluate data utility and information loss after the modifications
+#  Print the utility slot directly
+print(sdc@utility)
+```
+##  COMMENT:
+Information Loss (il1):
+
+The information loss (il1) is 315480.2, which indicates the extent to which the data has been altered due to the anonymization techniques. This value suggests that there has been a noticeable amount of information loss.
+Standardized Information Loss (il1s):
+
+The standardized information loss (il1s) is 1433.673. This standardized measure helps in understanding the relative impact of the modifications on the data's utility.
+Difference of Eigenvalues (eigen):
+
+The difference of eigenvalues is -0.7276922, indicating a reduction in the variability of the data. This suggests that the modifications have made the data more uniform, which can be beneficial for anonymity but may also reduce the data's utility for certain types of analysis.
+Overall, the metrics indicate that while the anonymization techniques have introduced some information loss, they have also reduced the variability of the data. This balance is crucial for ensuring that the data remains useful for analysis while protecting individual privacy.
+
+
+
+# 10. Export Anonymized Data
+```{r}
+#  Export Anonymized Data
+#  Extract the final anonymized microdata
+final_data <- extractManipData(sdc)
+head(final_data)
+
+#  Optionally, export the anonymized data to a CSV file
+write.csv(final_data, "anonymized_FIES2006.csv", row.names = FALSE)
+```
+##  COMMENT:
+ this process ensures that the dataset is anonymized and ready for use while protecting individual privacy. The export to CSV provides a convenient way to share or store the anonymized data for future reference.
+
+

@@ -1,0 +1,217 @@
+---
+title: "SES Data Anonymization Usecase2"
+author: "Abdellahi El Moustapha"
+date: "2025-03-31"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1. Introduction
+
+```{r}
+# Load the SES synthetic data from the laeken package
+library(sdcMicro)
+library(laeken)
+
+data(ses)
+
+# Check column names and dimensions
+colnames(ses)
+dim(ses)
+```
+## COMMENT:
+The `ses` dataset from the `laeken` package has been successfully loaded.  
+It consists of **15,691 observations** and **27 variables**, including key employment and income attributes such as `location`, `age`, `education`, `occupation`, `earnings`, and more.  
+This step confirms that the structure and dimensions of the synthetic SES data are as expected, and ready for anonymization tasks.
+
+
+# 2. Create sdcMicro Object
+
+```{r}
+# Define key categorical and numerical variables, and create an sdcMicro object
+sdc <- createSdcObj(ses,
+                    keyVars = c('size', 'age', 'location', 'occupation'),
+                    numVars = c('earningsHour', 'earnings'),
+                    weightVar = 'weights')
+
+# Display k-anonymity violations
+print(sdc, "kAnon")
+
+# Print risk summary
+print(sdc, "risk")
+```
+## COMMENT:
+An `sdcMicro` object was created using key categorical variables (`size`, `age`, `location`, `occupation`), numerical variables (`earningsHour`, `earnings`), and the weight variable (`weights`).  
+The output indicates significant k-anonymity violations:
+- 243 records violate 2-anonymity
+- 509 records violate 3-anonymity
+- 1,055 records violate 5-anonymity  
+Additionally, the dataset has an **expected re-identification count of 298.49 (1.90%)** and 547 records with higher risk than the majority, confirming the need for anonymization.
+
+
+# 3. Apply Local Suppression
+
+```{r}
+# Apply local suppression to achieve 3-anonymity
+sdc <- localSuppression(sdc, k = 3)
+
+# Check k-anonymity again after suppression
+print(sdc, "kAnon")
+
+# Check risk summary again after suppression
+print(sdc, "risk")
+```
+## COMMENT:
+Local suppression was applied to achieve **3-anonymity**.  
+After suppression:
+- 2-anonymity and 3-anonymity violations were fully eliminated (0%).
+- 5-anonymity violations dropped from **6.724% to 0.14%** (only 22 records).  
+Risk measures show a significant improvement:
+- Expected re-identifications reduced from **298.49 (1.90%)** to **114.54 (0.73%)**.
+- High-risk observations reduced from 547 to 41.
+This confirms the effectiveness of local suppression in enhancing dataset privacy.
+
+
+# 4. Microaggregation for Numerical Variables
+
+```{r}
+# Apply microaggregation with aggregation size of 5
+sdc <- microaggregation(sdc, aggr = 5)
+
+# Show updated risk on numerical variables
+print(sdc, "numrisk")
+```
+## COMMENT:
+Microaggregation was applied to the numerical key variables (`earningsHour`, `earnings`)  
+with an aggregation size of **5**.
+
+- **Disclosure risk** reduced dramatically from nearly **100%** to a range of **[0.00%; 92.45%]**
+- **Information Loss (IL1)** introduced: **106304.46**
+- **Difference in Eigenvalues**: **1.52%**
+
+This reflects a solid trade-off between reducing re-identification risk and preserving data utility.
+
+
+# 5. Add Correlated Noise
+
+```{r}
+# Add correlated noise to the continuous variables
+sdc <- addNoise(sdc, method='correlated2', noise = 20)
+
+# Show updated numerical risk after noise
+print(sdc, "numrisk")
+```
+## COMMENT:
+Correlated noise was added to the numerical key variables (`earningsHour`, `earnings`)  
+using the method `'correlated2'` with a noise level of **20**.
+
+- **Disclosure risk** dropped further to **[0.00%; 13.80%]**
+- **Information Loss (IL1)**: **719831.21**
+- **Difference in Eigenvalues**: **0.13%**
+
+The technique achieved a strong reduction in risk while keeping data structure nearly intact, as seen from the low eigenvalue shift.
+
+
+# 6. Data Utility - GINI Coefficient
+
+```{r}
+# GINI coefficient from original data
+g1 <- gini(inc="earningsHour", weigths="weights", breakdown="education", data=ses)
+g1
+
+
+```
+
+
+##  COMMENT:
+The original data reveals a clear gradient in income inequality across education levels: individuals in higher education groups (e.g., ISCED 5B) tend to show lower income dispersion, while those in lower education groups (e.g., ISCED 2) exhibit higher inequality.
+This reflects real-world socioeconomic structures, where education plays a major role in shaping income distribution.
+The overall GINI coefficient for hourly earnings indicates a moderate level of inequality, providing a baseline measure of earnings disparity in the dataset.
+This general statistic is essential for evaluating how anonymization techniques affect data utility, and domain-specific values further help assess inequality within educational subgroups.
+
+
+```{r}
+# GINI from anonymized data
+sesAnon <- extractManipData(sdc)
+g1a <- gini(inc="earningsHour", weigths="weights", breakdown="education", data=sesAnon)
+g1a
+
+
+```
+#COMMENT:
+The anonymized data preserves the general trend observed in the original dataset, where income inequality decreases with higher levels of education. However, some slight variations appear across strata due to the perturbations introduced for privacy. These fluctuations are expected as anonymization techniques, such as microaggregation and noise addition, slightly alter the distribution of income. Despite this, the stratified GINI coefficients remain close to the original values, indicating that the overall structure and interpretation of inequality are still reliable. This confirms that data utility has been successfully maintained, especially in terms of capturing the socioeconomic patterns related to education.
+
+
+# 7. Data Utility - Confidence Intervals
+
+```{r}
+# Variance and confidence intervals from original and anonymized data
+v1 <- variance("earningsHour", weights="weights", data=ses,
+               indicator=g1, X=calibVars(ses$location), breakdown="education", seed=123)
+
+v1a <- variance("earningsHour", weights="weights", data=sesAnon,
+                indicator=g1a, X=calibVars(sesAnon$location), breakdown="education", seed=123)
+
+# Extract CI
+v1$ci
+v1a$ci
+
+# CI by stratum
+v1$ciByStratum
+v1a$ciByStratum
+```
+## COMMENT:
+The confidence intervals for the GINI coefficient before and after anonymization are remarkably close, especially in terms of the overall range, suggesting that the anonymization process has preserved the core structure of income inequality in the data. The slight widening of the anonymized intervals is expected due to the added uncertainty, yet these remain largely within the bounds of the original, supporting the robustness of the utility. When looking at education-specific intervals, the overlap remains high across most groups, which further supports the claim that domain-specific insights are not substantially distorted. This reinforces that the anonymization technique applied here balances privacy protection with minimal degradation of analytical value.
+
+
+# 8. Data Utility - Gender Pay Gap
+
+```{r}
+# GPG from original data
+gpg1 <- gpg(inc="earningsHour", weigths="weights", breakdown="education", gender="sex", data=ses)
+gpg1
+
+# GPG from anonymized data
+gpg1a <- gpg(inc="earningsHour", weigths="weights", breakdown="education", gender="sex", data=sesAnon)
+gpg1a
+```
+##  COMMENT:
+The gender pay gap (GPG) analysis compares hourly earnings between men and women, both overall and across education levels. In the original data, the overall GPG is around 25.18%, suggesting that, on average, women earn approximately 25% less than men. This pattern is consistently reflected across most education strata, reinforcing the presence of gender-based income disparity.
+
+After anonymization, the overall GPG slightly drops to 25.04%, indicating strong preservation of utility at the aggregate level. Domain-specific comparisons also remain stable across education groups, with only minor variations introduced. For instance, ISCED 0 and 1 shows a near-zero or even negative gap post-anonymization, which may reflect sensitivity to low sample counts or local suppressions.
+
+Overall, the anonymization process successfully retains the key inequality patterns, especially the gender earnings disparity, while introducing only minimal distortion at both global and subgroup levels.
+
+
+# 9. Model-Based Estimation
+
+```{r}
+# Linear model from original data
+summary(lm(log(earningsHour) ~ location + size + sex + age + education, data = ses))
+
+# Linear model from anonymized data
+summary(lm(log(earningsHour) ~ location + size + sex + age + education, data = sesAnon))
+```
+##  COMMENT:
+The linear regression models examine the log of hourly earnings based on location, firm size, sex, age, and education. The original and anonymized data models yield strikingly similar results:
+
+Coefficients remain stable in both direction and magnitude across all predictors (e.g., the male coefficient is ~0.256 in both).
+
+Statistical significance is preserved for key variables like sex, age groups, and education levels, confirming that the anonymized data retains essential relationships.
+
+Slight drops in estimates for variables such as age and education in the anonymized model reflect a minor impact of noise addition or suppression, but core interpretations stay intact.
+
+The model fit remains nearly identical:
+
+Original: R² ≈ 0.2804
+
+Anonymized: R² ≈ 0.2795
+This confirms that the predictive power and structure of the model are preserved after anonymization.
+
+Overall, despite some information loss (e.g., 65 rows dropped due to anonymization), the anonymized data still supports robust model-based analysis, ensuring both utility and confidentiality.
+
